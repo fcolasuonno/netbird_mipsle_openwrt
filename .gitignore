@@ -5,7 +5,7 @@ netbird_*_mipsel_24kc.tar.gz
 
 # Keys (DO NOT COMMIT THE PRIVATE KEY)
 private.pem
-.pub
+*.pub
 
 VERSION
 
