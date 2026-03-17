@@ -1,0 +1,19 @@
+# Binaries and packages
+netbird
+*.apk
+netbird_*_mipsel_24kc.tar.gz
+
+# Keys (DO NOT COMMIT THE PRIVATE KEY)
+private.pem
+VERSION
+
+# Temporary build artifacts
+pkg_data/
+pkg_temp/
+pkg_control/
+*.tar.gz
+.PKGINFO
+.SIGN.RSA.*
+
+# Scripts that were for debugging
+create_apk_unsigned.sh
