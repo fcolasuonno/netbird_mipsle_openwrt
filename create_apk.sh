@@ -110,13 +110,19 @@ if [ -z "$NB_ARCH" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Version + key
+# Version + key — always fetch latest from GitHub
 # ---------------------------------------------------------------------------
-if [ -f VERSION ]; then
-    VERSION=$(cat VERSION)
-else
-    VERSION="0.66.4"
+echo "Fetching latest netbird release version..."
+VERSION=$(curl -fsSL "https://api.github.com/repos/netbirdio/netbird/releases/latest" \
+    | grep '"tag_name"' \
+    | sed 's/.*"tag_name": *"v\([^"]*\)".*/\1/')
+
+if [ -z "$VERSION" ]; then
+    echo "ERROR: Could not determine latest netbird version from GitHub API."
+    exit 1
 fi
+echo "Latest version: ${VERSION}"
+
 
 PRIVATE_KEY="private.pem"
 PKG_NAME="netbird"
