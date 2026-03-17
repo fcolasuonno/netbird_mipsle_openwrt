@@ -2,6 +2,7 @@
 netbird
 *.apk
 netbird_*_mipsel_24kc.tar.gz
+netbird_bin_*
 
 # Keys (DO NOT COMMIT THE PRIVATE KEY)
 private.pem
