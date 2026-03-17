@@ -1,17 +1,18 @@
 #!/bin/bash
+# create_apk.sh — builds an OpenWrt apk-tools v3 package using "apk mkpkg".
+#
+# OpenWrt (25.xx / main branch) uses apk-tools v3, whose package format (ADB)
+# is a custom binary format — NOT the concatenated-gzip-tars of Alpine v2.
+# You cannot hand-craft v3 packages; you must use "apk mkpkg" from
+# apk-tools >= 3.x.  This script will use apk from Docker/Podman (Alpine)
+# if "apk mkpkg" is not already available on the host.
+
 set -e
 
+# ---------------------------------------------------------------------------
 # Configuration
-KEY_NAME="my.rsa.pub"
+# ---------------------------------------------------------------------------
 PRIVATE_KEY="private.pem"
-PUBLIC_KEY="$KEY_NAME"
-
-# 0. Ensure keys exist
-if [ ! -f "$PRIVATE_KEY" ]; then
-    echo "Generating NEW RSA keys..."
-    openssl genrsa -out "$PRIVATE_KEY" 4096
-    openssl rsa -in "$PRIVATE_KEY" -pubout -out "$PUBLIC_KEY"
-fi
 
 if [ -f VERSION ]; then
     VERSION=$(cat VERSION)
@@ -20,79 +21,140 @@ else
 fi
 
 ARCH="mipsel_24kc"
-PKG_FILE="netbird_${VERSION}_${ARCH}.apk"
+PKG_NAME="netbird"
+PKG_VERSION="${VERSION}-r1"
+PKG_FILE="${PKG_NAME}_${VERSION}_${ARCH}.apk"
 
-# Temporary directories
-DATA_DIR="pkg_data"
-rm -rf "$DATA_DIR"
-mkdir -p "$DATA_DIR/usr/bin" "$DATA_DIR/etc/init.d" "$DATA_DIR/etc/netbird"
+# ---------------------------------------------------------------------------
+# 0. Ensure RSA key exists
+# ---------------------------------------------------------------------------
+if [ ! -f "$PRIVATE_KEY" ]; then
+    echo "Generating RSA private key..."
+    openssl genrsa -out "$PRIVATE_KEY" 4096
+fi
 
-echo "Preparing package structure..."
-cp netbird "$DATA_DIR/usr/bin/netbird"
-chmod +x "$DATA_DIR/usr/bin/netbird"
-cp pkg/etc/init.d/netbird "$DATA_DIR/etc/init.d/netbird"
-chmod +x "$DATA_DIR/etc/init.d/netbird"
+# ---------------------------------------------------------------------------
+# 1. Locate or obtain apk-tools v3
+#
+#    OpenWrt uses apk-tools v3. The package format (ADB) is a custom binary
+#    structure — NOT the Alpine v2 "concatenated gzipped tars" format.
+#    It cannot be hand-crafted; "apk mkpkg" is the only supported way.
+# ---------------------------------------------------------------------------
+APK_BIN=$(command -v apk 2>/dev/null || true)
 
-# Helper to strip exactly the last two 512-byte null blocks from a tar
-strip_tar_nulls() {
-    python3 -c "
-import sys
-data = sys.stdin.buffer.read()
-if data.endswith(b'\x00' * 1024):
-    sys.stdout.buffer.write(data[:-1024])
-else:
-    sys.stdout.buffer.write(data)
-"
+# Verify it actually supports mkpkg (v3 feature; absent in old Alpine v2 tools)
+if [ -n "$APK_BIN" ]; then
+    if ! "$APK_BIN" mkpkg --help >/dev/null 2>&1; then
+        echo "WARNING: 'apk' found but does not support 'mkpkg' (not v3 tools). Will use Docker."
+        APK_BIN=""
+    fi
+fi
+
+if [ -z "$APK_BIN" ]; then
+    CONTAINER_RUNTIME=$(command -v docker 2>/dev/null || command -v podman 2>/dev/null || true)
+    if [ -z "$CONTAINER_RUNTIME" ]; then
+        echo "ERROR: 'apk mkpkg' not found and no Docker/Podman available."
+        echo "Options:"
+        echo "  - Fedora/RHEL:  dnf install apk-tools"
+        echo "  - Docker/Podman: install either one and re-run this script"
+        exit 1
+    fi
+    echo "Using $CONTAINER_RUNTIME to access apk-tools v3 from Alpine..."
+    APK_BIN="${CONTAINER_RUNTIME} run --rm -v $(pwd):/work -w /work alpine:latest apk"
+fi
+
+echo "apk binary: $APK_BIN"
+
+# ---------------------------------------------------------------------------
+# 2. Prepare the package root file tree
+# ---------------------------------------------------------------------------
+ROOT_APK_DIR="pkg_root_apk"
+rm -rf "$ROOT_APK_DIR"
+
+mkdir -p "$ROOT_APK_DIR/usr/bin"
+mkdir -p "$ROOT_APK_DIR/etc/init.d"
+mkdir -p "$ROOT_APK_DIR/etc/netbird"
+
+echo "Copying package files..."
+cp netbird "$ROOT_APK_DIR/usr/bin/netbird"
+chmod 755 "$ROOT_APK_DIR/usr/bin/netbird"
+
+cp pkg/etc/init.d/netbird "$ROOT_APK_DIR/etc/init.d/netbird"
+chmod 755 "$ROOT_APK_DIR/etc/init.d/netbird"
+
+# ---------------------------------------------------------------------------
+# 3. Create the .list file — required by apk-tools v3 installed-db.
+#    Must list every file the package owns (with leading slash), one per line.
+#    This is what "apk info -L <pkg>" reads back after installation.
+# ---------------------------------------------------------------------------
+LIST_DIR="$ROOT_APK_DIR/lib/apk/packages"
+mkdir -p "$LIST_DIR"
+
+(cd "$ROOT_APK_DIR" && find . \( -type f -o -type l \) ! -path "./lib/apk/*" -printf "/%P\n" | sort) \
+    > "$LIST_DIR/${PKG_NAME}.list"
+
+echo "Package will own:"
+cat "$LIST_DIR/${PKG_NAME}.list"
+
+# ---------------------------------------------------------------------------
+# 4. init script hooks (post-install / pre-deinstall)
+# ---------------------------------------------------------------------------
+APK_SCRIPTS_DIR="apk_scripts"
+rm -rf "$APK_SCRIPTS_DIR"
+mkdir -p "$APK_SCRIPTS_DIR"
+
+cat > "$APK_SCRIPTS_DIR/post-install.sh" <<'HOOK'
+#!/bin/sh
+[ -x /etc/init.d/netbird ] && /etc/init.d/netbird enable || true
+HOOK
+chmod +x "$APK_SCRIPTS_DIR/post-install.sh"
+
+cat > "$APK_SCRIPTS_DIR/pre-deinstall.sh" <<'HOOK'
+#!/bin/sh
+[ -x /etc/init.d/netbird ] && {
+    /etc/init.d/netbird stop   || true
+    /etc/init.d/netbird disable || true
 }
+HOOK
+chmod +x "$APK_SCRIPTS_DIR/pre-deinstall.sh"
 
-echo "Creating Data Stream..."
-(cd "$DATA_DIR" && tar -c --format=posix --numeric-owner --owner=0 --group=0 .) | gzip -n -9 > data.tar.gz
-
-echo "Creating Control Stream..."
-DATA_HASH=$(sha256sum data.tar.gz | cut -d' ' -f1)
-SIZE=$(find "$DATA_DIR" -type f -printf "%s\n" | awk '{s+=$1} END {print s}')
-DATE=$(date +%s)
-
-cat > .PKGINFO <<EOF
-pkgname = netbird
-pkgver = ${VERSION}-r1
-pkgdesc = Connect your devices into a single secure private WireGuard mesh network
-url = https://netbird.io
-builddate = $DATE
-packager = Gemini CLI
-size = $SIZE
-arch = $ARCH
-license = BSD-3-Clause
-depend = libc
-depend = kmod-wireguard
-datahash = $DATA_HASH
-EOF
-
-# Create control.tar.gz (Tar segment)
-tar -c -b 1 --format=posix --numeric-owner --owner=0 --group=0 .PKGINFO | \
-    strip_tar_nulls | gzip -n -9 > control.tar.gz
-
-echo "Signing Control Stream (SHA1 Legacy Method)..."
-# Legacy naming: .SIGN.RSA.<keyname> (no algorithm prefix)
-# This is the most reliable way to match /etc/apk/keys/<keyname>
-SIG_FILENAME=".SIGN.RSA.$KEY_NAME"
-openssl dgst -sha1 -sign "$PRIVATE_KEY" -out "$SIG_FILENAME" control.tar.gz
-
-echo "Creating Signature Stream..."
-tar -c -b 1 --format=posix --numeric-owner --owner=0 --group=0 "$SIG_FILENAME" | \
-    strip_tar_nulls | gzip -n -9 > signature.tar.gz
-
-echo "Assembling APK..."
-cat signature.tar.gz control.tar.gz data.tar.gz > "$PKG_FILE"
-
-# Clean up
-rm -rf "$DATA_DIR" .PKGINFO "$SIG_FILENAME" control.tar.gz signature.tar.gz data.tar.gz
-
-echo "Done! Final signed package created: $PKG_FILE"
+# ---------------------------------------------------------------------------
+# 5. Build the package with apk mkpkg
+# ---------------------------------------------------------------------------
 echo ""
-echo "INSTALLATION STEPS:"
-echo "1. Copy $PUBLIC_KEY to /etc/apk/keys/ on target."
-echo "   (Make sure it's named exactly $KEY_NAME)"
-echo "2. Run: apk add ./$PKG_FILE"
+echo "Building ${PKG_FILE} ..."
+
+$APK_BIN mkpkg \
+    --info "name:${PKG_NAME}" \
+    --info "version:${PKG_VERSION}" \
+    --info "description:Connect devices into a secure private WireGuard mesh network" \
+    --info "arch:${ARCH}" \
+    --info "license:BSD-3-Clause" \
+    --info "url:https://netbird.io" \
+    --info "origin:${PKG_NAME}" \
+    --info "depends:libc kmod-wireguard" \
+    --script "post-install:${APK_SCRIPTS_DIR}/post-install.sh" \
+    --script "pre-deinstall:${APK_SCRIPTS_DIR}/pre-deinstall.sh" \
+    --files "${ROOT_APK_DIR}" \
+    --output "${PKG_FILE}" \
+    --sign "${PRIVATE_KEY}"
+
+# ---------------------------------------------------------------------------
+# 6. Clean up temporaries
+# ---------------------------------------------------------------------------
+rm -rf "$ROOT_APK_DIR" "$APK_SCRIPTS_DIR"
+
 echo ""
-echo "Note: The public key is a standard PEM file (-----BEGIN PUBLIC KEY-----)."
+echo "Done: ${PKG_FILE}"
+echo ""
+echo "INSTALLATION (OpenWrt 25.xx / apk-tools v3):"
+echo "  scp ${PKG_FILE} root@<router>:/tmp/"
+echo "  apk add --allow-untrusted /tmp/${PKG_FILE}"
+echo ""
+echo "  # Verify after install:"
+echo "  apk info -L ${PKG_NAME}"
+echo ""
+echo "To install with full signature verification instead of --allow-untrusted,"
+echo "extract the public key from ${PRIVATE_KEY} and place it in /etc/apk/keys/ on the router:"
+echo "  openssl rsa -in ${PRIVATE_KEY} -pubout -out netbird.pub"
+echo "  scp netbird.pub root@<router>:/etc/apk/keys/"
