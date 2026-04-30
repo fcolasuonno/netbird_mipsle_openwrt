@@ -10,13 +10,8 @@
 #   mt2500                GL-iNet Brume 2            → aarch64_cortex-a53
 #   mt1300                GL-iNet Beryl              → mipsel_24kc
 #   mt300n-v2             GL-iNet Mango              → mipsel_24kc
-#   ar750s / x750s        GL-iNet Slate              → ath79 / mips_24kc  (*)
+#   ar750s / x750s        GL-iNet Slate              → ath79 / mips_24kc
 #   ax1800                GL-iNet Flint              → arm_cortex-a53 (ipq6018)
-#   rpi4                  Raspberry Pi 4             → aarch64_cortex-a72
-#   x86_64                Generic x86-64             → x86_64
-#
-# (*) ath79 targets use mips_24kc — netbird upstream doesn't ship a separate
-#     MIPS big-endian build; use mipsel_24kc devices where possible.
 #
 # Raw OpenWrt arch targets (also accepted):
 #   mipsel_24kc  aarch64_cortex-a53  aarch64_cortex-a72
@@ -44,6 +39,9 @@ resolve_device() {
         mt300n-v2|mango|gl-mt300n-v2)       echo "mipsel_24kc" ;;
         mt300a|mt300n|gl-mt300*)            echo "mipsel_24kc" ;;
 
+        # GL-iNet ath79 (QCA9563) — mips 24kc
+        ar750s|slate|gl-ar750s)             echo "mips_24kc" ;;
+
         # GL-iNet IPQ (AX1800 / AXT1800) — ARM Cortex-A53
         ax1800|flint|gl-ax1800)             echo "arm_cortex-a53" ;;
         axt1800|slate-ax|gl-axt1800)        echo "arm_cortex-a53" ;;
@@ -56,7 +54,7 @@ resolve_device() {
         x86_64|x86-64|amd64)               echo "x86_64" ;;
 
         # Pass-through: already a valid arch string
-        mipsel_24kc|aarch64_cortex-a53|aarch64_cortex-a72|\
+        mipsel_24kc|mips_24kc|aarch64_cortex-a53|aarch64_cortex-a72|\
         arm_cortex-a53|arm_cortex-a7|arm_cortex-a9|x86_64)
                                             echo "$input" ;;
         *)
@@ -70,7 +68,8 @@ resolve_device() {
 # ---------------------------------------------------------------------------
 nb_arch_for() {
     case "$1" in
-        mipsel_24kc)            echo "mipsle" ;;
+        mipsel_24kc)            echo "mipsle_softfloat" ;;
+        mips_24kc)              echo "mips_softfloat" ;;
         aarch64_cortex-a53|\
         aarch64_cortex-a72|\
         arm_cortex-a53)         echo "arm64" ;;
@@ -93,6 +92,7 @@ if [ "$TARGET" = "UNKNOWN" ]; then
     echo "Known device aliases:"
     echo "  mt6000, mt3000, mt2500        → aarch64_cortex-a53"
     echo "  mt1300, mt300n-v2             → mipsel_24kc"
+    echo "  ar750s                        → mips_24kc"
     echo "  ax1800, axt1800               → arm_cortex-a53"
     echo "  rpi4                          → aarch64_cortex-a72"
     echo "  x86_64"

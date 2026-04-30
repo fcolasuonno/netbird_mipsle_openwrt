@@ -40,6 +40,7 @@ The script auto-detects the correct architecture for each device and fetches the
 | `mt2500`, `brume2` | GL-iNet Brume 2 | `aarch64_cortex-a53` |
 | `mt1300`, `beryl` | GL-iNet Beryl | `mipsel_24kc` |
 | `mt300n-v2`, `mango` | GL-iNet Mango | `mipsel_24kc` |
+| `ar750s`, `slate` | GL-iNet Slate | `mips_24kc` |
 | `ax1800`, `flint` | GL-iNet Flint | `arm_cortex-a53` |
 | `rpi4` | Raspberry Pi 4 | `aarch64_cortex-a72` |
 | `x86_64` | Generic x86-64 | `x86_64` |
